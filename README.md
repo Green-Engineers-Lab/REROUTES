@@ -1,6 +1,7 @@
 # REROUTES
-
 再生可能エネルギー情報提供システム【REPOS（リーポス）】（http://www.renewable-energy-potential.env.go.jp/RenewableEnergy/ ）からデータをダウンロードし、高空間解像度の再生可能エネルギーポテンシャルマップを作成するためのコードです。
+
+![image](https://user-images.githubusercontent.com/28499917/132072103-93f61a6f-9fc7-4df7-aaac-2794667e35da.png)
 
 ## Release Notes
 - 2021/07/29現在、データをダウンロードするコードと按分・集計用コードを公開中です。
