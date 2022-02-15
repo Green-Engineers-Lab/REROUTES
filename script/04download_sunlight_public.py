@@ -29,12 +29,12 @@ import os
 
 
 # 2.root_dirの設定====================================================================================================
-root_dir = r"C:\Users\GE\Desktop\remap_test"
+root_dir = r"C:\Users\GE\Documents\REROUTES-main"
 
 
 # 3.pathの設定=========================================================================================================
 # chrome driverのpath
-chromedriver = r"C:\Program Files\chromedriver_win32\chromedriver.exe"
+chromedriver = os.path.join(root_dir, r"chromedriver_win32\chromedriver.exe")
 # download先のpath
 download_path = os.path.join(root_dir, "download\sunlight_public")
 os.makedirs(download_path, exist_ok=True)
@@ -400,7 +400,7 @@ def downloadAgriculture(url, year, folder_name):
 # 6.施設データdownload=================================================================================
 # 市町村役場等及び公的集会施設データ(平成22年度)
 url = "https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-P05.html"
-download(url, "平成22年", "publicholl")
+download(url, "平成22年", "publichall")
 # 文化施設データ(平成25年度)
 url = "https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-P27.html"
 test = downloadGym(url, "平成25年", "gym")

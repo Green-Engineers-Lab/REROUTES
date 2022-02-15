@@ -8,10 +8,27 @@ import os
 import pandas as pd
 import glob
 import gc
+# for logging
+import json
+from logging import getLogger, config
+logger = getLogger(__name__)
 
 
 # 2.root_dirの設定==============================================================
-root_dir = r"E:\remap_test"
+root_dir = r"C:\Users\GE\Documents\REROUTES-main"
+
+
+# Logの設定 ===================================================================
+with open(os.path.join(root_dir, 'script/log_config.json'), 'r') as f:
+    log_conf = json.load(f)
+logfname = os.path.join(root_dir, "log", f"log_12_calculate_repos.log")
+if not os.path.isdir(os.path.join(root_dir, "log")):
+    os.makedirs(os.path.join(root_dir, "log"))
+if os.path.isfile(logfname):
+    os.remove(logfname)
+log_conf["handlers"]["fileHandler"]["filename"] = logfname
+config.dictConfig(log_conf)
+logger.info('Start 12calculate_repos.py program...')
 
 
 # 3.pathの設定==============================================================
@@ -26,6 +43,7 @@ os.makedirs(output_path, exist_ok=True)
 
 
 # 4.ファイル名設定===========================================================
+logger.info('4. path setting...')
 # 陸上風力
 onshore = os.path.join(download_path, "wind_land_i_s\wind_land_i_s.shp")
 # 洋上風力
@@ -44,6 +62,7 @@ japan = os.path.join(root_dir, r"download\japan\N03-190101_GML\N03-19_190101.shp
 
 
 # 5.関数==============================================================================================================
+logger.info('5. Defining functions...')
 # 関数
 def Extract(inFeature,expression):
     '''
@@ -277,8 +296,10 @@ def geothermal(kw_km2,area):
 """
 
 
+logger.info('Estimating REpot...')
 try:
     # 6.陸上風力発電ポテンシャル推計============================================================
+    logger.info("Processing onshore...")
     # 座標をGCS JCD2011（EPSGコード6668）に変換
     onshore_pro = os.path.join(calculate_path, "onshore_pro.shp")
     arcpy.management.Project(onshore, onshore_pro, 6668)
@@ -301,10 +322,12 @@ try:
     # featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(onshore_intersected, "onshore", "")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check onshore, please!')
+    logger.info(e)
 
 try:
     # 7.洋上風力発電ポテンシャル推計============================================================
+    logger.info("Processing offshore...")
     # 風速6.5m/s以上のメッシュを抽出
     offshore_65 = Extract(offshore,"gridcode >= 65")
     # 0.1m/s刻みの風速を0.5m/s刻みに分類する
@@ -324,11 +347,13 @@ try:
     # featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(offshore_join,"grid_code", "offshore")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check offshore, please!')
+    logger.info(e)
 
 
 try:
     # 8.地熱発電ポテンシャル推計============================================================
+    logger.info("Processing geoflash...")
     # 座標をGCS JCD2011（EPSGコード6668）に変換
     geoflash_pro = os.path.join(calculate_path, "geoflash_pro.shp")
     arcpy.management.Project(geoflash, geoflash_pro, 6668)
@@ -345,10 +370,12 @@ try:
     # featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(geoflash_intersected,"geoflash","")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check geoflash, please!')
+    logger.info(e)
 
 try:
     # 9.中小水力発電ポテンシャル推計============================================================
+    logger.info("Processing river...")
     # 座標をGCS JCD2011（EPSGコード6668）に変換
     river_pro = os.path.join(calculate_path, "river_pro.shp")
     arcpy.management.Project(river, river_pro, 6668)
@@ -361,11 +388,13 @@ try:
     #　featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(river_join,"river","")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check river, please!')
+    logger.info(e)
 
 
 try:
     # 10.住宅系太陽光発電ポテンシャル推計============================================================
+    logger.info("Processing building...")
     # 住宅系太陽光shapeファイルの本体と補完を結合
     sunlight_building = os.path.join(calculate_path, "sunlight_building.shp")
     arcpy.Merge_management([sunlight,sunlight_sup], sunlight_building)
@@ -415,4 +444,8 @@ try:
     dataframe = os.path.join(output_path, "building_summary.csv")
     df_merged.to_csv(dataframe)
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check building, please!')
+    logger.info(e)
+
+
+logger.info("Finished 12 calculate_repos.py")

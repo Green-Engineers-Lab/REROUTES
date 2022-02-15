@@ -8,14 +8,31 @@ import arcpy
 import os
 import pandas as pd
 import glob
-
+from tqdm import tqdm
+# for logging
+import json
+from logging import getLogger, config
+logger = getLogger(__name__)
 
 # 2.root_dirの設定==============================================================
-root_dir = r"E:\remap_test"
+root_dir = r"C:\Users\GE\Documents\REROUTES-main"
 # 事前準備が必要な河川別の河川延長と人口化率のデータのpathをここに
-riverbank_prepared_csv = r"C:\Users\GE\Desktop\riverbank_prepared\river_bank_data_modify.csv"
+riverbank_prepared_csv = os.path.join(root_dir, r"data\riverbank_prepared\river_bank_data_modify.csv")
+
+# Logの設定 ===================================================================
+with open(os.path.join(root_dir, 'script/log_config.json'), 'r') as f:
+    log_conf = json.load(f)
+logfname = os.path.join(root_dir, "log", f"log_13_calculate_sunlight_public.log")
+if not os.path.isdir(os.path.join(root_dir, "log")):
+    os.makedirs(os.path.join(root_dir, "log"))
+if os.path.isfile(logfname):
+    os.remove(logfname)
+log_conf["handlers"]["fileHandler"]["filename"] = logfname
+config.dictConfig(log_conf)
+logger.info('Start 13calculate_sunlight_public_test.py program...')
 
 # 3.pathの設定==============================================================
+logger.info('3. Path setting...')
 # download先のpathに合わせる
 download_path = os.path.join(root_dir, "download\sunlight_public")
 # 処理途中で生じる生成物の保存先
@@ -27,9 +44,10 @@ os.makedirs(output_path, exist_ok=True)
 
 
 # 4.ファイル名設定===========================================================
+logger.info('4. File name setting...')
 #  複数ファイルあるものはpathを記す
 # 市町村役場等及び公的集会施設データ(平成22年度)
-publicholl = os.path.join(download_path, "publicholl\**\*.shp")
+publichall = os.path.join(download_path, "publichall\**\*.shp")
 # 文化施設データ(平成25年度)
 gym = os.path.join(download_path,"gym\P27-13\P27-13\P27-13.shp")
 # 学校データ(平成25年度)
@@ -60,6 +78,7 @@ japan = os.path.join(root_dir, r"download\japan\N03-190101_GML\N03-19_190101.shp
 
 
 # 5.関数====================================================================
+logger.info('5. Defining functions...')
 def Extract(inFeature,expression, outFeature_name):
     '''
     属性選択を行い，選択したものを抽出
@@ -142,7 +161,7 @@ def GeoCalculateField(inFeature,newfield_name,type,method,unit):
     return inFeature
 
 
-def IntegrationShape(inFiles,outName,define):
+def IntegrateShapes(inFiles,outName,define):
     '''
     複数shapeの座標定義，merge，座標変換を行う
     input :
@@ -160,6 +179,42 @@ def IntegrationShape(inFiles,outName,define):
             arcpy.DefineProjection_management(inFile, 4612)
     # merge
     arcpy.Merge_management(inFiles, outFeature)
+    # 座標をGCS JCD2011（EPSGコード4612）に変換
+    inFeature = outFeature
+    outFeature = inFeature.rstrip(".shp") + "_pro.shp"
+    arcpy.management.Project(inFeature, outFeature, 6668)
+    return outFeature
+
+
+def IntegrateExactShapes(inFiles,outName,define,expression,processname):
+    '''
+    複数shapeの座標定義，merge，座標変換を行う
+    input :
+        inFiles : 入力shapeのfile名のリスト
+        outName : 出力結果の名前を入力
+        define : 座標定義をするかしないか
+    output :
+        outFeature : 出力shape
+    '''
+    # 計算過程のshapeをcalculate_pathに残していく
+    outFeature = os.path.join(calculate_path, f"tmp_{processname}", f"{outName}.shp")
+    if not os.path.isdir(os.path.join(calculate_path, f"tmp_{processname}")):
+        os.makedirs(os.path.join(calculate_path, f"tmp_{processname}"))
+    logger.info("Processing feature selection...")
+    # import pdb; pdb.set_trace()
+    out_selecteds = []
+    for inFile in tqdm(inFiles):
+        # 座標をGCS JCD2011（EPSGコード4612）に変換
+        if define == True:
+            arcpy.DefineProjection_management(inFile, 4612)
+        # 特定のポリゴンを抽出して上書きする
+        out_selected = os.path.join(calculate_path, f"tmp_{processname}", os.path.basename(inFile).rstrip(".shp") + "_selected.shp")
+        feature_selected = arcpy.SelectLayerByAttribute_management(inFile, "NEW_SELECTION", expression) # Required == chcp 932, arcgisの文字コードがshift-jis
+        arcpy.CopyFeatures_management(feature_selected, out_selected)
+        out_selecteds.append(out_selected)
+    # merge
+    logger.info("Merging shapefiles...")
+    arcpy.Merge_management(out_selecteds, outFeature)
     # 座標をGCS JCD2011（EPSGコード4612）に変換
     inFeature = outFeature
     outFeature = inFeature.rstrip(".shp") + "_pro.shp"
@@ -255,8 +310,9 @@ def passenger_ave(d,u,p):
 
 
 # 6.ポテンシャル量推計のためのコードブロックと関数 ================================
-code_publicholl = """
-def publicholl(pref, flag):
+logger.info('6. Defining code blocks for arcpy...')
+code_publichall = """
+def publichall(pref, flag):
     '''
     公民館のポテンシャル推計
     input : 
@@ -512,33 +568,37 @@ pref_unit = [["01",1150],["02",1105],["03",1137],["04",1160],["05",1095],["06",1
              ["41",1233],["42",1253],["43",1275],["44",1221],["45",1339],["46",1307],["47",1304],["48",1215]]
 
 
-#　4.推計===============================================
+#　7.推計===============================================
+logger.info('7. Estimating REpot...')
 try:
     # 公民館================================================
+    logger.info('7.1 processing Hall...')
     # downloodしたshapeファイルのpathを取得
-    files = glob.glob(publicholl)
+    files = glob.glob(publichall)
     # 取得したpathより，全shapeのmergeと座標変換を行う
-    publicholl_pro = IntegrationShape(files, "publicholl", True)
+    publichall_pro = IntegrateShapes(files, "publichall", True)
     # 公民館と集会施設を抽出
-    publicholl_selected = Extract(publicholl_pro,"P05_002 = '4' or P05_002 = '5'","")
+    publichall_selected = Extract(publichall_pro,"P05_002 = '4' or P05_002 = '5'","")
     # 公民館，集会施設の１施設あたりの平均面積を総務省，公共施設状況経年比較表2017を参照し，算出
     #  単位はm2, 全国の総延床面積[m2]　/ 全国の公民館数[個]
     kominkan_ave = 9532424 / 13055
     syukai_ave = 14300815 / 164768
     # 各施設のポテンシャル量を推計
-    #  code_publichollで定義したpublicholl関数を使用
-    publicholl_selected = CalculateField(publicholl_selected, "publicholl", "DOUBLE", "publicholl(!P05_001!,!P05_002!)", code_publicholl)
+    #  code_publichallで定義したpublichall関数を使用
+    publichall_selected = CalculateField(publichall_selected, "publichall", "DOUBLE", "publichall(!P05_001!,!P05_002!)", code_publichall)
     #　各pointデータに空間結合で2分の1地域メッシュのKEY_CODEを持たせる
-    publicholl_join = publicholl_selected.rstrip('.shp') + '_meshjoin.shp'
-    arcpy.SpatialJoin_analysis(publicholl_selected, mesh, publicholl_join, "", "", "","INTERSECT")
+    publichall_join = publichall_selected.rstrip('.shp') + '_meshjoin.shp'
+    arcpy.SpatialJoin_analysis(publichall_selected, mesh, publichall_join, "", "", "","INTERSECT")
     # featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
-    toCSV(publicholl_join, "publicholl", "") 
+    toCSV(publichall_join, "publichall", "") 
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.1 processing Hall, please!')
+    logger.error(e)
 
 
 try:
     # 体育館================================================
+    logger.info('7.2 processing gym...')
     # 座標をGCS JCD2011（EPSGコード6668）に変換
     gym_pro = os.path.join(calculate_path, "gym_pro.shp")
     arcpy.management.Project(gym, gym_pro, 6668)
@@ -561,11 +621,13 @@ try:
     # featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(gym_join, "gym", "") 
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.2 processing gym, please!')
+    logger.error(e)
 
 
 try:
     # 学校===================================================
+    logger.info('7.3 processing school...')
     # 座標をGCS JCD2011（EPSGコード6668）に変換
     school_pro = os.path.join(calculate_path, "school_pro.shp")
     arcpy.management.Project(school, school_pro, 6668)
@@ -615,17 +677,19 @@ try:
     #   featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(univ_join, "univ", "")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.3 processing school, please!')
+    logger.error(e)
 
 
 try:
     # 公共下水=================================================
+    logger.info('7.4 processing sewerage...')
     # downloodしたshapeファイルのpathを取得
     files = glob.glob(sewerage)
     # P22bというファイルだけを抜き出す
     files_b = [file for file in files if "P22b" in file]
     # 取得したpathより，全shapeのmergeと座標変換を行う
-    sewerage_pro = IntegrationShape(files_b, "sewerage", False)
+    sewerage_pro = IntegrateShapes(files_b, "sewerage", False)
     # 公共下水処理場の平均敷地面積を算出
     #  環境省，令和元年度再生可能エネルギーに関するゾーニング基礎情報等の整備・公開等に関する委託業務報告書より，公共下水の全国敷地面積を参照
     #  施設数は，公共下水処理場のpoint featureの数を使用
@@ -642,13 +706,15 @@ try:
     #   featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(sewerage_join, "sewerage", "")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.4 processing sewerage, please!')
+    logger.error(e)
 
 
 try:
     # 工場====================================================
     # 都市地域土地利用細分メッシュデータから工場を抜き出す
     #  downloodしたshapeファイルのpathを取得
+    logger.info('7.5 processing factory...')
     files = glob.glob(factory)
     #  データ量が大きいので25個のfileごとにmergeする
     #   files数をcount
@@ -657,43 +723,46 @@ try:
     count = countFiles // step
     if count % step != 0:
         count += 1
-    urban_lands = []
+    lulucs_factory = []
+    logger.info("Merging factory LULC meshes...")
     for i in range(count):
-        # 25fileずつマージと座標変換を行う
+        logger.info(f"Processing {i} of {count}...")
+        # 25fileずつ、土地利用種0702を抽出して、マージと座標変換を行う
         files_i = files[i*step:(i+1)*step]
-        urban_land_pro_i = IntegrationShape(files_i, f'urban_land{i+1}', False)
-        # 土地利用種"0702"の工場を抽出
-        urban_land_select_i = Extract(urban_land_pro_i, "土地利用種 = '0702'", "")
+        factory_select_i = IntegrateExactShapes(files_i, f'tmp_lulc_factory_{i+1}', False, expression = "土地利用種 = '0702'", processname = "factory")
         # リストに変数名を追加
-        urban_lands.append(urban_land_select_i)
+        lulucs_factory.append(factory_select_i)
+
     # 分割したshapeを結合
-    urban_land = os.path.join(calculate_path, "urban_land.shp")
-    arcpy.Merge_management(urban_lands, urban_land)
+    lulc_factory = os.path.join(calculate_path, "lulc_factory.shp")
+    arcpy.Merge_management(lulucs_factory, lulc_factory)
     # ポテンシャル推計
     #  工場メッシュに均等にポテンシャルを持たせる
     #  環境省，令和元年度再生可能エネルギーに関するゾーニング基礎情報等の整備・公開等に関する委託業務報告書より，全国発電量を参照
     #  大規模工場43億kwh/y，中規模工場66億，小規模工場268億
-    kwh_ave = Division(urban_land, (43+66+268)*(10**8)) 
+    kwh_ave = Division(lulc_factory, (43+66+268)*(10**8)) 
     #  各メッシュにポテンシャル量を持たせる
-    urban_land = CalculateField(urban_land, "factory", "DOUBLE", kwh_ave, "")
+    lulc_factory = CalculateField(lulc_factory, "factory", "DOUBLE", kwh_ave, "")
     #　各pointデータに空間結合で2分の1地域メッシュのKEY_CODEを持たせる
-    urban_land_join = urban_land.rstrip('.shp') + '_meshjoin.shp'
-    arcpy.SpatialJoin_analysis(urban_land, mesh, urban_land_join, "", "", "","INTERSECT") # HAVE_THEIR_CENTER_INを推奨。手元のarcpy環境では動作しなかったため、INTERSECTを利用。
+    lulc_factory_join = lulc_factory.rstrip('.shp') + '_meshjoin.shp'
+    arcpy.SpatialJoin_analysis(lulc_factory, mesh, lulc_factory_join, "", "", "","INTERSECT") # HAVE_THEIR_CENTER_INを推奨。手元のarcpy環境では動作しなかったため、INTERSECTを利用。
     #  featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
-    toCSV(urban_land_join, "factory", "")
+    toCSV(lulc_factory_join, "factory", "")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.5 processing factory, please!')
+    logger.error(e)
 
 
 try:
     # 工業団地================================================
+    logger.info('7.6 processing industrial park...')
     # downloodしたshapeファイルのpathを取得
     files = glob.glob(industrialpark)
     # mergeで不具合が出るため、field"L05_007"をdeleteする
     for file in files:
         arcpy.management.DeleteField(file, ["L05_002","L05_007","L05_008"])
     # 取得したpathより，全shapeのmergeと座標変換を行う
-    industrialpark_pro = IntegrationShape(files, "industrialpark", True)
+    industrialpark_pro = IntegrateShapes(files, "industrialpark", True)
     # industrialpark_proポリゴンと標準地域メッシュをインターセクト
     #   2分の1地域メッシュのKEY_CODEと設備容量を対応付ける
     inFeatures = [[industrialpark_pro,1],[mesh,2]] # industrialpark_proを切り取るのでランクを1に
@@ -720,11 +789,13 @@ try:
     industrialpark_outcsv = os.path.join(output_path, "induspark_summary.csv") 
     df.to_csv(industrialpark_outcsv)
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.6 processing industrial park, please!')
+    logger.error(e)
 
 
 try:
     # 最終処分場==========================================================
+    logger.info('7.7 processing indu_final...')
     # downloodしたshapeファイルのpathを取得
     files = glob.glob(disposal)
     # General(一般廃棄物)とIndustrial(産業廃棄物)を分類する
@@ -735,7 +806,7 @@ try:
     for file_general in files_general:
         arcpy.management.DeleteField(file_general, ["P15_005","P15_006","P15_007","P15_009","P15_010"])
     #  全shapeのmergeと座標変換を行う
-    generaldisposal_pro = IntegrationShape(files_general, "generaldisposal", True)
+    generaldisposal_pro = IntegrateShapes(files_general, "generaldisposal", True)
     #  最終処分場を抽出
     generalfinal = Extract(generaldisposal_pro, "P15_003 = '7'","")
     #  ポテンシャル推計
@@ -752,7 +823,7 @@ try:
     toCSV(generalfinal_join, "gene_final" ,"")
     # 産業廃棄物のポテンシャル推計
     #  全shapeのmergeと座標変換を行う
-    industrialdisposal_pro = IntegrationShape(files_industrial, "industrialdisposal", True)
+    industrialdisposal_pro = IntegrateShapes(files_industrial, "industrialdisposal", True)
     #  最終処分場を抽出
     industrialfinal = Extract(industrialdisposal_pro, "P15_017 = '2'","")
     #  ポテンシャル推計
@@ -768,11 +839,12 @@ try:
     #  featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(industrialfinal_join, "indu_final" ,"")
 except Exception as e:
-    print(e)
-
+    logger.error('Error!!! Check 7.7 processing indu_final, please!')
+    logger.error(e)
 
 try:
     # 河川敷・堤防敷===============================================================================
+    logger.info('7.7 processing riverbank...')
     # downloodしたshapeファイルのpathを取得
     files = glob.glob(riverbank)
     # streamというファイルだけを抜き出す
@@ -781,7 +853,7 @@ try:
     for file_stream in files_stream:
         arcpy.management.DeleteField(file_stream, ["W05_006","W05_007","W05_008","W05_009","W05_010"])
     # 全shapeのmergeと座標変換を行う
-    riverbank_pro = IntegrationShape(files_stream, "riverbank", True)
+    riverbank_pro = IntegrateShapes(files_stream, "riverbank", True)
     # merege前の各shapeのfield名が一致していないため揃える
     #  code_riverbankfieldで定義した，riverbankfield関数を使用
     riverbank_pro = CalculateField(riverbank_pro,"name","TEXT","riverbankfield(!W05_004!,!河川名!)",code_riverbankfield)
@@ -827,11 +899,13 @@ try:
     #  featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(riverbank_intersect, "riverbank" ,"")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.8 processing river bank, please!')
+    logger.error(e)
 
 
 try:
     # 駅======================================================================================================
+    logger.info("7.8 processing station...")
     # 座標をGCS JCD2011（EPSGコード6668）に変換
     station_pro = os.path.join(calculate_path, "station_pro.shp")
     arcpy.management.Project(station, station_pro, 6668)
@@ -942,11 +1016,13 @@ try:
             PR_outcsv = os.path.join(output_path, "PR_summary.csv") 
             df.to_csv(PR_outcsv)
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.9 processing stations, please!')
+    logger.error(e)
 
 
 try:
     # 道路=================================================================================================
+    logger.info("7.10 processing road...")
     # 座標をGCS JCD2000（EPSGコード4612）を定義
     arcpy.DefineProjection_management(road, 4612)
     # 座標をGCS JCD2011（EPSGコード6668）に変換
@@ -976,40 +1052,36 @@ try:
     road_outcsv = os.path.join(output_path, "road_summary.csv") 
     df.to_csv(road_outcsv)
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.10 processing road, please!')
+    logger.error(e)
 
 
 try:
     #土地利用細分メッシュデータ=====================================
     # downloodしたshapeファイルのpathを取得
     files = glob.glob(landuse)
-    # データ量が大きいため，30ファイルずつ分割してマージする 
+    # データ量が大きいので30個のfileごとに処理する
     countFiles = len(files)
     step = 30
     count = countFiles // step
     if count % step != 0:
         count += 1
-    landuses = []
-    for i in range(count):
-        # 30fileずつマージと座標変換を行う
-        files_i = files[i*step:(i+1)*step]
-        landuse_i = IntegrationShape(files_i, f'landuse{i+1}', False)
-        # landuse_iのリストを作成
-        landuses.append(landuse_i)
 
-    
     # 海岸(土地利用細分メッシュデータを使用)=================================================================
     # landusesから土地利用種"1400"の海岸を抜き出す
-    coasts = []
-    for landuse_i in landuses:
-        # shapeファイル名を定義
-        coast_i = os.path.basename(landuse_i).rstrip(".shp") + "_coast.shp"
-        coast_i = Extract(landuse_i,"土地利用種 = '1400'",coast_i)
-        # coast_iのリストを作成
-        coasts.append(coast_i)
+    logger.info("7.11 processing Coast...")
+    lulucs_coast = []
+    logger.info("Merging coast LULC meshes...")
+    for i in range(count):
+        logger.info(f"Processing {i} of {count}...")
+        # 30fileずつ、土地利用種1400を抽出して、マージと座標変換を行う
+        files_i = files[i*step:(i+1)*step]
+        coast_select_i = IntegrateExactShapes(files_i, f'tmp_lulc_coast_{i+1}', False, expression = "土地利用種 = '1400'", processname = "coast")
+        # リストに変数名を追加
+        lulucs_coast.append(coast_select_i)
     # coastsをmeregeする
-    coast = os.path.join(calculate_path, "coast.shp")
-    arcpy.Merge_management(coasts, coast)
+    coast = os.path.join(calculate_path, "lulc_coast.shp")
+    arcpy.Merge_management(lulucs_coast, coast)
     # 各メッシュデータに空間結合で2分の1地域メッシュのKEY_CODEと市区町村コードを持たせる
     coast_join = coast.rstrip('.shp') + '_meshjoin.shp'
     arcpy.SpatialJoin_analysis(coast, mesh, coast_join, "", "", "","INTERSECT") # HAVE_THEIR_CENTER_INを推奨。手元のarcpy環境では動作しなかったため、INTERSECTを利用。
@@ -1022,16 +1094,19 @@ try:
 
     # ゴルフ場(土地利用細分メッシュデータを使用)==============================================================
     # landusesから土地利用種"1600"のゴルフ場を抜き出す
-    golfs = []
-    for landuse_i in landuses:
-        # shapeファイル名を定義
-        golf_i = os.path.basename(landuse_i).rstrip(".shp") + "_golf.shp"
-        golf_i = Extract(landuse_i,"土地利用種 = '1600'",golf_i)
-        # golf_iのリストを作成
-        golfs.append(golf_i)
+    logger.info("7.12 processing golf...")
+    lulcs_golf = []
+    logger.info("Merging golf LULC meshes...")
+    for i in range(count):
+        logger.info(f"Processing {i} of {count}...")
+        # 30fileずつ、土地利用種1600を抽出して、マージと座標変換を行う
+        files_i = files[i*step:(i+1)*step]
+        golf_select_i = IntegrateExactShapes(files_i, f'tmp_lulc_golf_{i+1}', False, expression = "土地利用種 = '1600'", processname = "golf")
+        # リストに変数名を追加
+        lulcs_golf.append(golf_select_i)
     # golfsをmeregeする
     golf = os.path.join(calculate_path, "golf.shp")
-    arcpy.Merge_management(golfs, golf)
+    arcpy.Merge_management(lulcs_golf, golf)
     # ポテンシャル推計
     #  ゴルフ場ごとに均等にポテンシャルを持たせる
     #  環境省，令和元年度再生可能エネルギーに関するゾーニング基礎情報等の整備・公開等に関する委託業務報告書より，全国発電量を参照
@@ -1048,19 +1123,23 @@ try:
 
     #田・その他農用地(土地利用細分メッシュデータを使用)==============================================================
     # landusesから土地利用種"0100","0200"を抜き出す
-    ricefields = []
-    for landuse_i in landuses:
-        # shapeファイル名を定義
-        ricefield_i = os.path.basename(landuse_i).rstrip(".shp") + "_ricefield.shp"
-        ricefield_i = Extract(landuse_i,"土地利用種 = '0100' or 土地利用種 = '0200'",ricefield_i)
-        # ricefield_iのリストを作成
-        ricefields.append(ricefield_i)
+    logger.info("7.13 processing ricefields...")
+    logger.info("Merging ricefields LULC meshes...")
+    lulcs_ricefield = []
+    for i in range(count):
+        logger.info(f"Processing {i} of {count}...")
+        # 30fileずつ、土地利用種0100 or 0200を抽出して、マージと座標変換を行う
+        files_i = files[i*step:(i+1)*step]
+        ricefield_select_i = IntegrateExactShapes(files_i, f'tmp_lulc_ricefield_{i+1}', False, expression = "土地利用種 = '0100' or 土地利用種 = '0200'", processname = "ricefield")
+        # リストに変数名を追加
+        lulcs_ricefield.append(ricefield_select_i)
     # ricefieldsをmeregeする
     ricefield = os.path.join(calculate_path, "ricefield.shp")
-    arcpy.Merge_management(ricefields, ricefield)
+    arcpy.Merge_management(lulcs_ricefield, ricefield)
     # 不具合が生じるため，行政区域と重なっている部分だけを切り取る
     ricefield_select = GeoExtract(ricefield,japan)
     # 各メッシュデータに空間結合で2分の1地域メッシュのKEY_CODEを持たせる
+    logger.info("(heavy operation, eta 1-2 hours) spacially joinning ricefields & 500m mesh...")
     ricefield_join = ricefield.rstrip('.shp') + '_meshjoin.shp'
     arcpy.SpatialJoin_analysis(ricefield, mesh, ricefield_join, "", "", "","INTERSECT") # HAVE_THEIR_CENTER_INを推奨。手元のarcpy環境では動作しなかったため、INTERSECTを利用。
     # pandasでポテンシャル量を算出する
@@ -1083,6 +1162,7 @@ try:
 
 
     # 耕作放棄地(土地利用細分メッシュデータ,農業地域データを使用)==============================================================
+    logger.info("7.14 processing abandoned farmland...")
     # 農業地域データを処理する
     #  階層が異なるため，pathを2つ設定
     agriculture1 = os.path.join(agriculture, "**\*.shp")
@@ -1090,25 +1170,27 @@ try:
     files1 = glob.glob(agriculture1)
     files2 = glob.glob(agriculture2)
     # 全shapeのpathを統合
-    files = files1 + files2
+    agri_files = files1 + files2
     # "205.shp"とfile名にあるものを使用する
-    files_205 = [file for file in files if "205.shp" in file]
+    files_205 = [file for file in agri_files if "205.shp" in file]
     # 取得したpathより，全shapeのmergeと座標変換を行う
-    agriculture205 = IntegrationShape(files_205, "agriculture", False)
+    agriculture205 = IntegrateShapes(files_205, "agriculture", False)
     # landusesから土地利用種"0600"の荒れ地を抜き出す
-    abandoneds = []
-    for landuse_i in landuses:
-        # shapeファイル名を定義
-        abandoned_i = os.path.basename(landuse_i).rstrip(".shp") + "_abandoned"
-        abandoned_i = Extract(landuse_i,"土地利用種 = '0600'",abandoned_i)
-        # abandoned_iのリストを作成
-        abandoneds.append(abandoned_i)
+    lulcs_abandoned = []
+    for i in range(count):
+        logger.info(f"Processing {i} of {count}...")
+        # 30fileずつ、土地利用種0600を抽出して、マージと座標変換を行う
+        files_i = files[i*step:(i+1)*step]
+        abandoned_select_i = IntegrateExactShapes(files_i, f'tmp_lulc_abandoned_{i+1}', False, expression = "土地利用種 = '0600'", processname = "abandoned")
+        # リストに変数名を追加
+        lulcs_abandoned.append(abandoned_select_i)
     # abandonedsをmeregeする
     abandoned = os.path.join(calculate_path, "abandoned.shp")
-    arcpy.Merge_management(abandoneds, abandoned)
+    arcpy.Merge_management(lulcs_abandoned, abandoned)
     # 耕作放棄地を荒れ地と農業地域の重なっている部分とする
     abandoned_farmland = GeoExtract(abandoned,agriculture205)
     # 各メッシュデータに空間結合で2分の1地域メッシュのKEY_CODEを持たせる
+    logger.info("(heavy operation) spacially joinning abandoned farmlands & 500m mesh...")
     abandoned_farmland_join = abandoned_farmland.rstrip('.shp') + '_meshjoin.shp'
     arcpy.SpatialJoin_analysis(abandoned_farmland, mesh, abandoned_farmland_join, "", "", "","INTERSECT") # HAVE_THEIR_CENTER_INを推奨。手元のarcpy環境では動作しなかったため、INTERSECTを利用。
     # 各施設のポテンシャル量を推計
@@ -1117,4 +1199,8 @@ try:
     # featureのtableデータをcsvに出力し，2分の1地域メッシュごとにsummary
     toCSV(abandoned_farmland_join, "abandoned", "")
 except Exception as e:
-    print(e)
+    logger.error('Error!!! Check 7.11-14, please!')
+    logger.error(e)
+
+
+logger.info("Finished 13 calculate_sunlight_public.py")

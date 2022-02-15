@@ -15,12 +15,12 @@ import os
 
 
 # 2.root_dirの設定====================================================================================================
-root_dir = r"C:\Users\GE\Desktop\remap_test"
+root_dir = r"C:\Users\GE\Documents\REROUTES-main"
 
 
 # 3.pathの設定=========================================================================================================
 # chrome driverのpath
-chromedriver = r"C:\Program Files\chromedriver_win32\chromedriver.exe"
+chromedriver = os.path.join(root_dir, r"chromedriver_win32\chromedriver.exe")
 # download先のpath
 download_path = os.path.join(root_dir, "download\japan")
 os.makedirs(download_path, exist_ok=True)
@@ -43,7 +43,7 @@ driver.get(url)
 comment = "javascript:DownLd('396.68MB','N03-190101_GML.zip','../data/N03/N03-2019/N03-190101_GML.zip' ,this);"
 driver.execute_script(comment)
 Alert(driver).accept()
-time.sleep(20)
+time.sleep(60)
 driver.quit()
 
 

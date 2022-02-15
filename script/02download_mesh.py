@@ -14,12 +14,12 @@ import os
 
 
 # 2.root_dirの設定====================================================================================================
-root_dir = r"C:\Users\GE\Desktop\remap_test"
+root_dir = r"C:\Users\GE\Documents\REROUTES-main"
 
 
 # 3.pathの設定=========================================================================================================
 # chrome driverのpath
-chromedriver = r"C:\Program Files\chromedriver_win32\chromedriver.exe"
+chromedriver = os.path.join(root_dir, r"chromedriver_win32\chromedriver.exe")
 # download先のpath
 download_path = os.path.join(root_dir, "download\mesh")
 os.makedirs(download_path, exist_ok=True)
